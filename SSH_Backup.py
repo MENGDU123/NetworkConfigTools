@@ -81,26 +81,46 @@ try:
             if SECONDARY_PASSWORD:
                 conn.enable()
 
-            remote_name = f"config_{ip}_{TIME_NOW}.bak"
-            tftp_url = f"tftp://{TFTP_SERVER_IP}:{port}/{remote_name}" #基于锐捷命令
-            cmd = f"copy flash:/config.text {tftp_url}"
+            remote_name = f"{ip}_{TIME_NOW}.bak"  # 本地最终想用的名字
+            tmp_name = "config.text"  # 交换机上传时的固定名字
+            tftp_url = f"tftp://{TFTP_SERVER_IP}/{tmp_name}"
 
-            output = conn.send_command_timing(cmd, read_timeout=60)
-            if "Y/N" in output or "[Y/N]" in output or "confirm" in output.lower():
-                output += conn.send_command_timing("y", read_timeout=60)
-            print(output)
+            tmp_path = os.path.join(TFTP_ROOT, tmp_name)
+            final_path = os.path.join(TFTP_ROOT, remote_name)
 
-            local_path = os.path.join(TFTP_ROOT, remote_name)
+            # 清除上次文件残留
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+            cmd_list = [
+                f"copy flash:/config.text {tftp_url}",
+                "dir"
+            ]
+
+            for cmd in cmd_list:
+                output = conn.send_command_timing(cmd, read_timeout=60)
+                if "Y/N" in output or "[Y/N]" in output or "confirm" in output.lower():
+                    output += conn.send_command_timing("y", read_timeout=60)
+                print(output)
+
+            # 等 config.text 落地
             for _ in range(60):
-                if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
                     break
                 time.sleep(0.5)
 
-            if os.path.exists(local_path):
-                print(f"[成功] {ip} -> 已保存 {local_path}")
+            # 落地后立刻改名
+            if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                try:
+                    os.replace(tmp_path, final_path)  # 本地改名
+                    print(f"[成功] {ip} -> 已保存 {final_path}")
+                except OSError as e:
+                    print(f"[警告] {ip} -> 文件已到但改名失败: {e}")
             else:
                 print(f"[警告] {ip} -> 命令执行了，但本地没等到文件")
-
 
         except Exception as e:
             print(f"[失败] {ip} -> {e}")

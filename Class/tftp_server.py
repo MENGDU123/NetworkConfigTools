@@ -5,7 +5,7 @@ import tftpy
 
 class TFTPServer:
     def __init__(self,root_dir: str = "./TftpFiles", host: str = "0.0.0.0",
-                  port_range: tuple = (2000,4000)):
+                  port_range: tuple = (69,69)):
         self.root_dir = root_dir
         self.host = host
         #单下划线不会触发名称改写，子类调用请注意

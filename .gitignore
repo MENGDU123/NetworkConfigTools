@@ -1,3 +1,5 @@
 /.venv/
 .idea/
 Class/__pycache__/
+/SSH_Backup-for_dx.py
+TftpFiles/
