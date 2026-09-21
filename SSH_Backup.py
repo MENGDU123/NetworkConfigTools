@@ -10,8 +10,14 @@ from datetime import datetime
 # import threading
 # import random
 # import socket
-# import time
-# import os
+import time
+import sys, os
+
+sys.path.append(os.path.join(os.path.dirname(__file__),"Class"))
+# noinspection PyUnresolvedReferences
+from tftp_server import TFTPServer
+# 抱歉我没买 Pycharm Pro，社区版有些不那么智能。
+# from Class.tftp_server import TFTPServer
 
 #读取当前时间，接下来所有备份文件均会使用此时间（不包含脚本运行延后的时间）
 TIME_NOW = datetime.now()
@@ -21,64 +27,89 @@ print(TIME_NOW)
 USERNAME = "admin"
 SECONDARY_PASSWORD = "" #无需enable就留空（确实不需要）
 DEVICE = "ruijie_os" #选择交换机系统
-BACKUP_CMD = [ #交换机备份命令
-    f"copy flash:/config.text flash:/config_{TIME_NOW}.text.bak",
-    "dir"
-]
+
+#已弃用
+# BACKUP_CMD = [ #交换机备份命令
+#     f"copy flash:/config.text flash:/config_{TIME_NOW}.text.bak",
+#     "dir"
+# ]
+
+TFTP_BIND_HOST = "0.0.0.0"
+TFTP_SERVER_IP = "172.16.20.183" #后续会开发自动获取IP
+TFTP_ROOT = "./TftpFiles"
+os.makedirs(TFTP_ROOT, exist_ok=True)
 
 IP_LIST = [f"10.1.254.{i}" for i in range(1, 91)]
 # IP_LIST = ["10.1.254.254"]
 #这里可以修改IP列表，SS端口默认为22
 
-for ip in IP_LIST:
-    password_list = [
-        "ruijie",
-        "123456"
-    ] #密码列表，假设网络域中每台设备密码不一样，那么脚本将会从密码列表中选取一个尝试。
-      #以上密码仅供测试，请勿在生产环境设置弱密码！
-      #后续有打算开发数据库导入的计划。
+srv = TFTPServer(root_dir=TFTP_ROOT, host=TFTP_SERVER_IP)
+port = srv.start()
+print(f"TFTP 服务器已启动，端口{port}")
 
-    conn = None
-    try:
-        for idx, password in enumerate(password_list):
-            try:
-                conn = ConnectHandler(
-                    device_type=DEVICE,
-                    host=ip,
-                    username=USERNAME,
-                    password=password,
-                    secret=SECONDARY_PASSWORD,
-                )
-                print()
-                print(f"{ip}    -> 密码 {idx + 1} 认证成功")
-                break
-            except NetmikoAuthenticationException:
-                if idx < len(password_list) - 1:
-                    print(f"{ip}    -> 密码 {idx + 1} 认证失败，尝试下一个")
-                    continue
-        if conn is None:
-            print(f"[失败] {ip} -> 没有匹配密码。")
-            continue
+try:
+    for ip in IP_LIST:
+        password_list = [
+            "ruijie",
+            "123456"
+        ] #密码列表，假设网络域中每台设备密码不一样，那么脚本将会从密码列表中选取一个尝试。
+          #以上密码仅供测试，请勿在生产环境设置弱密码！
+          #后续有打算开发数据库导入的计划。
 
-        if SECONDARY_PASSWORD:
-            conn.enable()
+        conn = None
+        try:
+            for idx, password in enumerate(password_list):
+                try:
+                    conn = ConnectHandler(
+                        device_type=DEVICE,
+                        host=ip,
+                        username=USERNAME,
+                        password=password,
+                        secret=SECONDARY_PASSWORD,
+                    )
+                    print()
+                    print(f"{ip}    -> 密码 {idx + 1} 认证成功")
+                    break
+                except NetmikoAuthenticationException:
+                    if idx < len(password_list) - 1:
+                        print(f"{ip}    -> 密码 {idx + 1} 认证失败，尝试下一个")
+                        continue
+            if conn is None:
+                print(f"[失败] {ip} -> 没有匹配密码。")
+                continue
 
-        #执行预设备份命令
-        for cmd in BACKUP_CMD:
-            output = conn.send_command_timing(cmd)
+            if SECONDARY_PASSWORD:
+                conn.enable()
+
+            remote_name = f"config_{ip}_{TIME_NOW}.bak"
+            tftp_url = f"tftp://{TFTP_SERVER_IP}:{port}/{remote_name}" #基于锐捷命令
+            cmd = f"copy flash:/config.text {tftp_url}"
+
+            output = conn.send_command_timing(cmd, read_timeout=60)
             if "Y/N" in output or "[Y/N]" in output or "confirm" in output.lower():
-                output += conn.send_command_timing("y")
+                output += conn.send_command_timing("y", read_timeout=60)
             print(output)
 
-        print(f"[成功] {ip} -> 备份完成，文件: config_{TIME_NOW}.text.bak")
+            local_path = os.path.join(TFTP_ROOT, remote_name)
+            for _ in range(60):
+                if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+                    break
+                time.sleep(0.5)
+
+            if os.path.exists(local_path):
+                print(f"[成功] {ip} -> 已保存 {local_path}")
+            else:
+                print(f"[警告] {ip} -> 命令执行了，但本地没等到文件")
 
 
-    except Exception as e:
-        print(f"[失败] {ip} -> {e}")
+        except Exception as e:
+            print(f"[失败] {ip} -> {e}")
 
-    finally:
-        if conn is not None:
-            try:
-                conn.disconnect()
-            except Exception:
-                pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+finally:
+    srv.stop()
